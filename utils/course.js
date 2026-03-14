@@ -29,6 +29,72 @@ async function goToNextSection(page) {
     });
 }
 
+// 往后查找最近的未完成章节/节点，跳过当前卡住的位置
+async function goToNextUncompleted(page) {
+    return page.evaluate(() => {
+        const chapters = Array.from(document.querySelectorAll('.catalogItem'));
+        // 找到当前所在的章节
+        let curIdx = chapters.findIndex(ch => {
+            const header = ch.querySelector('.basic.chapter');
+            return header && header.classList.contains('active');
+        });
+        if (curIdx === -1) {
+            curIdx = chapters.findIndex(ch => ch.querySelector('.oneline.active, .basic.active'));
+        }
+
+        // 1) 先在当前章节内找未完成的 section/point（非当前 active 的）
+        if (curIdx >= 0) {
+            const curChapter = chapters[curIdx];
+            // 找当前 active 的 section/point 的 <li>
+            const activeEl = curChapter.querySelector('.oneline.active');
+            const activeLi = activeEl ? activeEl.closest('li') : null;
+            // 在当前章节内所有 .basic.uncomplete 中找一个不是当前 active 的
+            const uncompleted = curChapter.querySelectorAll('.basic.uncomplete');
+            for (const uc of uncompleted) {
+                // 跳过章节级别的 header 本身
+                if (uc.classList.contains('chapter')) continue;
+                // 跳过当前 active 的元素
+                if (uc.classList.contains('active')) continue;
+                const li = uc.closest('li');
+                if (li && li === activeLi) continue;
+                const label = uc.querySelector('.oneline') || uc;
+                try { label.scrollIntoView({ block: 'center' }); } catch {}
+                label.click();
+                console.log('⏩ 跳到当前章节内未完成节点：', label.innerText.trim());
+                return true;
+            }
+        }
+
+        // 2) 从当前章节往后找第一个 uncomplete 的章节
+        for (let i = curIdx + 1; i < chapters.length; i++) {
+            const header = chapters[i].querySelector('.basic.chapter');
+            if (header && header.classList.contains('uncomplete')) {
+                const label = chapters[i].querySelector('.oneline');
+                if (label) {
+                    try { label.scrollIntoView({ block: 'center' }); } catch {}
+                    label.click();
+                    console.log('⏩ 前进到未完成章节：', label.innerText.trim());
+                    return true;
+                }
+            }
+        }
+        // 3) 往后没找到，从头开始找（可能前面有漏掉的）
+        for (let i = 0; i < curIdx; i++) {
+            const header = chapters[i].querySelector('.basic.chapter');
+            if (header && header.classList.contains('uncomplete')) {
+                const label = chapters[i].querySelector('.oneline');
+                if (label) {
+                    try { label.scrollIntoView({ block: 'center' }); } catch {}
+                    label.click();
+                    console.log('🔄 回到未完成章节：', label.innerText.trim());
+                    return true;
+                }
+            }
+        }
+        return false;
+    });
+}
+
 // 往前查找最近的未完成章节（章级别 .catalogItem），点击展开
 async function goToPrevUncompleted(page) {
     return page.evaluate(() => {
@@ -92,6 +158,10 @@ async function learnCourse(page, courseId, log) {
             await page.waitForTimeout(1000);
             quizRetries = 0;
             if (!await goToNextSection(page)) {
+                if (await goToNextUncompleted(page)) {
+                    log('⏩ 跳转到其他未完成章节...');
+                    continue;
+                }
                 log('🏁 已完成所有章节');
                 break;
             }
@@ -114,6 +184,10 @@ async function learnCourse(page, courseId, log) {
                 log('⚠️ 测验重试次数已达上限，跳过本节');
                 quizRetries = 0;
                 if (!await goToNextSection(page)) {
+                    if (await goToNextUncompleted(page)) {
+                        log('⏩ 跳转到其他未完成章节...');
+                        continue;
+                    }
                     log('🏁 已完成所有章节');
                     break;
                 }
@@ -144,13 +218,22 @@ async function learnCourse(page, courseId, log) {
             await tracker.markCurrentWatched(page);
             await page.waitForTimeout(3000);
         } else {
-            // 检测空子文件夹（显示"点击下方继续学习"）或闯关模式锁定提示，自动跳过
+            // 检测闯关模式锁定或空子文件夹，自动跳过
             const skipReason = await page.evaluate(() => {
-                const hint = document.querySelector('.unfoldInfo');
-                if (hint) {
+                // 闯关模式：页面上任意 .unfoldInfo 包含关键词即触发（ng-if 保证只有当前 section 的会渲染）
+                for (const hint of document.querySelectorAll('.unfoldInfo')) {
                     const text = hint.innerText || '';
-                    if (text.includes('点击下方继续学习')) return 'empty';
                     if (text.includes('闯关模式') || text.includes('请先完成之前')) return 'gatelock';
+                }
+                // 空子节点：只检查最深层 active 节点自身所在 <li>，避免误匹配父级 section 的提示
+                const allActive = document.querySelectorAll('.oneline.active');
+                const activeOneline = allActive.length ? allActive[allActive.length - 1] : null;
+                if (activeOneline) {
+                    const activeLi = activeOneline.closest('li');
+                    if (activeLi) {
+                        const hint = activeLi.querySelector(':scope > .unfoldInfo');
+                        if (hint && (hint.innerText || '').includes('点击下方继续学习')) return 'empty';
+                    }
                 }
                 return null;
             });
@@ -158,6 +241,10 @@ async function learnCourse(page, courseId, log) {
                 log('⏭️ 空子节点，跳过...');
                 quizRetries = 0;
                 if (!await goToNextSection(page)) {
+                    if (await goToNextUncompleted(page)) {
+                        log('⏩ 跳转到其他未完成章节...');
+                        continue;
+                    }
                     log('🏁 已完成所有章节');
                     break;
                 }
@@ -169,6 +256,10 @@ async function learnCourse(page, courseId, log) {
                     log('⚠️ 闯关模式回退次数已达上限，跳过本节');
                     gatelockRetries = 0;
                     if (!await goToNextSection(page)) {
+                        if (await goToNextUncompleted(page)) {
+                            log('⏩ 跳转到其他未完成章节...');
+                            continue;
+                        }
                         log('🏁 已完成所有章节');
                         break;
                     }
@@ -180,6 +271,10 @@ async function learnCourse(page, courseId, log) {
                     log('⚠️ 未找到前置未完成节点，跳过');
                     gatelockRetries = 0;
                     if (!await goToNextSection(page)) {
+                        if (await goToNextUncompleted(page)) {
+                            log('⏩ 跳转到其他未完成章节...');
+                            continue;
+                        }
                         log('🏁 已完成所有章节');
                         break;
                     }
@@ -196,6 +291,11 @@ async function learnCourse(page, courseId, log) {
             quizRetries = 0;
             log('⏭️ 进入下一节...');
             if (!await goToNextSection(page)) {
+                // goToNextSection 失败，尝试跳到其他未完成章节
+                if (await goToNextUncompleted(page)) {
+                    log('⏩ 跳转到其他未完成章节...');
+                    continue;
+                }
                 log('🏁 已完成所有章节');
                 break;
             }
