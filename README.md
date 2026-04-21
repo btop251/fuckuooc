@@ -1,6 +1,6 @@
 # fuckuooc
 
-一键全自动完成 [UOOC 联盟](https://uooc.net.cn/) 课程学习，包括视频观看、视频内弹题、测验答题。运行后可最小化窗口，去做自己的事情。
+一键全自动完成 [UOOC 联盟](https://uooc.net.cn/) 课程学习，包括视频观看、视频内弹题、测验答题。运行后可最小化窗口，去做自己的事情。该工具修改自https://github.com/YusongXiao/fuckuooc添加了自动评论与自动完成作业功能
 
 ## ✨ Features
 
@@ -37,7 +37,7 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/YusongXiao/fuckuooc
+git clone https://github.com/btop251/fuckuooc
 cd fuckuooc
 ```
 
@@ -82,9 +82,9 @@ node start.js
 | 视频播放 | ✅ 支持 | 自动进入课程、定位未看视频、2 倍速静音播放并记录进度 |
 | 视频中弹出测验 | ✅ 支持 | 穷举选项组合自动提交，直到通过 |
 | 视频后测验 | ✅ 支持 | 截图题目 → 多模态大模型识图答题 → 自动提交 |
-| 讨论 | ❌ 不支持 | 需要人工参与 |
+| 讨论 | ✅ 支持 | 自动复制评论区的其他评论 |
 | 考试 | ❌ 不支持 | 不会自动参与或提交考试 |
-| 作业 | ❌ 不支持 | 不会自动完成作业内容 |
+| 作业 | ✅ 支持 | 自动完成作业内容 |
 
 ---
 
@@ -154,21 +154,25 @@ node start.js
 ## 📁 项目结构
 
 ```
-start.js              # 启动入口
-config.txt             # 配置文件（账号、API Key、模型等）
-package.json
+start.js
+config.txt
 utils/
-  config.js            # 配置读取与数据目录管理
-  browser.js           # 浏览器启动、反检测、验证码处理
-  login.js             # 登录流程 + 并发课程调度
-  course.js            # 单课程学习主循环（章节导航）
-  video.js             # VideoTracker 类：视频播放、进度记录、去重
-  quiz.js              # 测验处理：截图 → 大模型答题 → 提交
-  module.js            # 多模态大模型接口（截图识别 + 答题一体化）
-  logger.js            # 带颜色的日志输出
+  browser.js         # 浏览器启动、验证码、人类点击
+  cli.js             # 启动时两个开关
+  config.js          # 配置读取
+  course.js          # 学习窗口主循环
+  discussion.js      # 评论逻辑
+  login.js           # 登录与总调度
+  logger.js          # 彩色日志
+  module.js          # 大模型调用
+  quiz.js            # 测验处理
+  task.js            # 作业处理
+  task_worker.js     # 评论/作业独立窗口
+  video.js           # 视频播放与进度记录
 data/
-  <username>/          # 按用户名隔离的数据目录
-    <courseId>.txt      # 已观看视频的 URL 记录
+  <username>/
+    <courseId>.txt
+    discussion_<courseId>.json
 ```
 
 如需详细了解实现原理，请移步 [原理.md](原理.md)。
