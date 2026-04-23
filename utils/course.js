@@ -34,6 +34,68 @@ async function goToNextSection(page) {
     });
 }
 
+async function goToNextUncompleted(page) {
+    return page.evaluate(() => {
+        const chapters = Array.from(document.querySelectorAll('.catalogItem'));
+        let curIdx = chapters.findIndex(chapter => {
+            const header = chapter.querySelector('.basic.chapter');
+            return header && header.classList.contains('active');
+        });
+        if (curIdx === -1) {
+            curIdx = chapters.findIndex(chapter => chapter.querySelector('.oneline.active, .basic.active'));
+        }
+
+        if (curIdx >= 0) {
+            const curChapter = chapters[curIdx];
+            const activeEl = curChapter.querySelector('.oneline.active');
+            const activeLi = activeEl ? activeEl.closest('li') : null;
+            const uncompleted = curChapter.querySelectorAll('.basic.uncomplete');
+            for (const block of uncompleted) {
+                if (block.classList.contains('chapter')) continue;
+                if (block.classList.contains('active')) continue;
+                const li = block.closest('li');
+                if (li && li === activeLi) continue;
+                const label = block.querySelector('.oneline') || block;
+                try {
+                    label.scrollIntoView({ block: 'center' });
+                } catch {}
+                label.click();
+                return true;
+            }
+        }
+
+        for (let index = curIdx + 1; index < chapters.length; index++) {
+            const header = chapters[index].querySelector('.basic.chapter');
+            if (header && header.classList.contains('uncomplete')) {
+                const label = chapters[index].querySelector('.oneline');
+                if (label) {
+                    try {
+                        label.scrollIntoView({ block: 'center' });
+                    } catch {}
+                    label.click();
+                    return true;
+                }
+            }
+        }
+
+        for (let index = 0; index < curIdx; index++) {
+            const header = chapters[index].querySelector('.basic.chapter');
+            if (header && header.classList.contains('uncomplete')) {
+                const label = chapters[index].querySelector('.oneline');
+                if (label) {
+                    try {
+                        label.scrollIntoView({ block: 'center' });
+                    } catch {}
+                    label.click();
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    });
+}
+
 async function goToPrevUncompleted(page) {
     return page.evaluate(() => {
         const chapters = Array.from(document.querySelectorAll('.catalogItem'));
@@ -59,6 +121,15 @@ async function goToPrevUncompleted(page) {
         }
         return false;
     });
+}
+
+async function goToNextPending(page, log) {
+    if (await goToNextSection(page)) return true;
+    if (await goToNextUncompleted(page)) {
+        log('⏭️ 跳转到其他未完成章节...');
+        return true;
+    }
+    return false;
 }
 
 async function learnCourse(page, courseId, log, options = {}) {
@@ -92,7 +163,7 @@ async function learnCourse(page, courseId, log, options = {}) {
             } catch {}
             await page.waitForTimeout(1000);
             quizRetries = 0;
-            if (!await goToNextSection(page)) {
+            if (!await goToNextPending(page, log)) {
                 log('🏁 已完成所有章节');
                 break;
             }
@@ -110,7 +181,7 @@ async function learnCourse(page, courseId, log, options = {}) {
                 log('💬 当前为讨论任务，已交给评论/作业窗口处理，跳过本节');
             }
             await page.waitForTimeout(1000);
-            if (!await goToNextSection(page)) {
+            if (!await goToNextPending(page, log)) {
                 log('🏁 已完成所有章节');
                 break;
             }
@@ -132,7 +203,7 @@ async function learnCourse(page, courseId, log, options = {}) {
             if (quizRetries >= maxQuizRetries) {
                 log('⚠️ 测验重试次数已达上限，跳过本节');
                 quizRetries = 0;
-                if (!await goToNextSection(page)) {
+                if (!await goToNextPending(page, log)) {
                     log('🏁 已完成所有章节');
                     break;
                 }
@@ -180,7 +251,7 @@ async function learnCourse(page, courseId, log, options = {}) {
         if (skipReason === 'empty') {
             log('⏭️ 空子节点，跳过...');
             quizRetries = 0;
-            if (!await goToNextSection(page)) {
+            if (!await goToNextPending(page, log)) {
                 log('🏁 已完成所有章节');
                 break;
             }
@@ -192,7 +263,7 @@ async function learnCourse(page, courseId, log, options = {}) {
             if (gatelockRetries > maxGatelockRetries) {
                 log('⚠️ 闯关模式回退次数已达上限，跳过本节');
                 gatelockRetries = 0;
-                if (!await goToNextSection(page)) {
+                if (!await goToNextPending(page, log)) {
                     log('🏁 已完成所有章节');
                     break;
                 }
@@ -203,7 +274,7 @@ async function learnCourse(page, courseId, log, options = {}) {
             if (!await goToPrevUncompleted(page)) {
                 log('⚠️ 未找到前置未完成章节，尝试跳过');
                 gatelockRetries = 0;
-                if (!await goToNextSection(page)) {
+                if (!await goToNextPending(page, log)) {
                     log('🏁 已完成所有章节');
                     break;
                 }
@@ -215,7 +286,7 @@ async function learnCourse(page, courseId, log, options = {}) {
             log('💬 处理讨论任务...');
             await handleLearningDiscussionTask(page, courseId, log, options);
             await page.waitForTimeout(1000);
-            if (!await goToNextSection(page)) {
+            if (!await goToNextPending(page, log)) {
                 log('🏁 已完成所有章节');
                 break;
             }
@@ -230,7 +301,7 @@ async function learnCourse(page, courseId, log, options = {}) {
 
         quizRetries = 0;
         log('⏭️ 进入下一节...');
-        if (!await goToNextSection(page)) {
+        if (!await goToNextPending(page, log)) {
             log('🏁 已完成所有章节');
             break;
         }

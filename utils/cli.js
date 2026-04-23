@@ -5,7 +5,6 @@ const {
     ENABLE_LEARNING,
     ENABLE_DISCUSSION,
     ENABLE_HOMEWORK,
-    ENABLE_TASK_WORKER,
     DISCUSSION_INTERVAL_MS,
     DISCUSSION_MAX_POSTS,
     DISCUSSION_SCAN_PAGES,
@@ -14,12 +13,11 @@ const {
 } = require('./config');
 
 function getDefaultRuntimeOptions() {
-    const enableCourseTasks = ENABLE_TASK_WORKER || ENABLE_DISCUSSION || ENABLE_HOMEWORK;
     return {
         enableLearning: ENABLE_LEARNING,
-        enableDiscussion: enableCourseTasks,
-        enableHomework: enableCourseTasks,
-        enableTaskWorker: enableCourseTasks,
+        enableDiscussion: ENABLE_DISCUSSION,
+        enableHomework: ENABLE_HOMEWORK,
+        enableTaskWorker: ENABLE_DISCUSSION || ENABLE_HOMEWORK,
         discussionIntervalMs: DISCUSSION_INTERVAL_MS,
         discussionMaxPosts: DISCUSSION_MAX_POSTS,
         discussionScanPages: DISCUSSION_SCAN_PAGES,
@@ -44,14 +42,15 @@ async function buildRuntimeOptions() {
     const rl = readline.createInterface({ input, output });
     try {
         const enableLearning = await askYesNo(rl, '是否自动学习视频/测验', defaults.enableLearning);
-        const enableCourseTasks = await askYesNo(rl, '是否评论/作业', defaults.enableTaskWorker);
+        const enableDiscussion = await askYesNo(rl, '是否自动评论', defaults.enableDiscussion);
+        const enableHomework = await askYesNo(rl, '是否自动作业', defaults.enableHomework);
 
         return {
             ...defaults,
             enableLearning,
-            enableDiscussion: enableCourseTasks,
-            enableHomework: enableCourseTasks,
-            enableTaskWorker: enableCourseTasks
+            enableDiscussion,
+            enableHomework,
+            enableTaskWorker: enableDiscussion || enableHomework
         };
     } finally {
         rl.close();

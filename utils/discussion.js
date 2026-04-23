@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR } = require('./config');
+const { safeTaskNavigate } = require('./task_page');
 
 const DISCUSSION_TYPES = [10, 20, 30];
 const DISCUSSION_KEYWORDS = ['讨论', '提问', '发言', '交流', '问答', '论坛', '话题'];
@@ -214,11 +215,11 @@ async function runCourseDiscussionAutomation(page, courseId, log, options = {}) 
     const targets = [];
 
     try {
-        await page.goto(`http://www.uooc.net.cn/home/course/${courseId}#/discusscom`, {
+        await safeTaskNavigate(page, `http://www.uooc.net.cn/home/course/${courseId}#/discusscom`, {
             waitUntil: 'domcontentloaded',
-            timeout: 60000
+            timeout: 60000,
+            settleMs: 2000
         });
-        await page.waitForTimeout(2000);
     } catch (err) {
         log(`⚠️ 打开课程讨论页失败: ${err.message}`);
     }

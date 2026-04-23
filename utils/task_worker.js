@@ -1,12 +1,19 @@
 const { runCourseDiscussionAutomation } = require('./discussion');
 const { runCourseHomeworkAutomation, fetchJson } = require('./task');
+const {
+    isPageUsable,
+    isRecoverableTaskPageError,
+    createTaskPage,
+    ensureTaskPage,
+    safeTaskNavigate
+} = require('./task_page');
 
 async function getCourseProgress(page, courseId) {
-    await page.goto(`http://www.uooc.net.cn/home/course/${courseId}#/result`, {
+    await safeTaskNavigate(page, `http://www.uooc.net.cn/home/course/${courseId}#/result`, {
         waitUntil: 'domcontentloaded',
-        timeout: 60000
+        timeout: 60000,
+        settleMs: 2500
     });
-    await page.waitForTimeout(2500);
     return fetchJson(page, `http://www.uooc.net.cn/home/course/progress?cid=${courseId}`);
 }
 
@@ -42,74 +49,151 @@ function discussionNeedMore(snapshot) {
     return snapshot.score + 0.001 < snapshot.weight;
 }
 
-async function runCourseTaskWorker(context, courseIds, options = {}) {
-    const page = await context.newPage();
+function createTaskLogger(options, index, total, courseId) {
+    return options.createLogger
+        ? options.createLogger(`[任务窗${index + 1}/${total}:${courseId}]`, index)
+        : console.log;
+}
+
+function markPageClosedSkip(log, courseId, phase) {
+    log(`[task-worker] task page closed during ${phase}, skip ${courseId} and continue next course`);
+}
+
+async function refreshCourseProgress(page, courseId, progress, log) {
     try {
+        const nextProgress = await getCourseProgress(page, courseId);
         await page.bringToFront().catch(() => {});
+        return nextProgress;
+    } catch (err) {
+        if (isRecoverableTaskPageError(page, err)) {
+            markPageClosedSkip(log, courseId, 'progress refresh');
+            return null;
+        }
+        log(`[task-worker] refresh progress for ${courseId} failed: ${err.message}`);
+        return progress;
+    }
+}
+
+async function runCourseTaskWorker(context, courseIds, options = {}) {
+    let page = await createTaskPage(context);
+
+    try {
         for (let index = 0; index < courseIds.length; index++) {
             const courseId = courseIds[index];
-            const log = options.createLogger
-                ? options.createLogger(`[任务窗${index + 1}/${courseIds.length}:${courseId}]`, index)
-                : console.log;
+            const log = createTaskLogger(options, index, courseIds.length, courseId);
 
-            log('📋 开始处理课程任务窗口');
+            try {
+                page = await ensureTaskPage(context, page);
+            } catch (err) {
+                log(`[task-worker] create task page failed: ${err.message}`);
+                break;
+            }
+
+            log('[task-worker] start course task workflow');
 
             let progress;
             try {
                 progress = await getCourseProgress(page, courseId);
                 await page.bringToFront().catch(() => {});
             } catch (err) {
-                log(`⚠️ 获取成绩进度失败: ${err.message}`);
+                if (isRecoverableTaskPageError(page, err)) {
+                    markPageClosedSkip(log, courseId, 'progress fetch');
+                    page = null;
+                    continue;
+                }
+                log(`[task-worker] get progress for ${courseId} failed: ${err.message}`);
                 continue;
             }
 
             let homework = getHomeworkSnapshot(progress);
             let discussion = getDiscussionSnapshot(progress);
-
-            log(`📊 作业进度 ${homework.done}/${homework.total}，讨论得分 ${discussion.score}/${discussion.weight}，讨论数 ${discussion.count}`);
+            log(`[task-worker] homework ${homework.done}/${homework.total}, discussion ${discussion.score}/${discussion.weight}, count ${discussion.count}`);
 
             if (options.enableHomework) {
                 const handled = await runCourseHomeworkAutomation(page, courseId, log, options).catch(err => {
-                    log(`⚠️ 作业流程失败: ${err.message}`);
+                    log(`[task-worker] homework workflow failed: ${err.message}`);
                     return 0;
                 });
+
+                if (!isPageUsable(page)) {
+                    markPageClosedSkip(log, courseId, 'homework workflow');
+                    page = null;
+                    continue;
+                }
+
                 if (handled > 0) {
-                    progress = await getCourseProgress(page, courseId).catch(() => progress);
+                    const nextProgress = await refreshCourseProgress(page, courseId, progress, log);
+                    if (nextProgress === null) {
+                        page = null;
+                        continue;
+                    }
+                    progress = nextProgress;
                     homework = getHomeworkSnapshot(progress);
                     discussion = getDiscussionSnapshot(progress);
-                    log(`📊 作业处理后：${homework.done}/${homework.total}`);
+                    log(`[task-worker] homework after workflow: ${homework.done}/${homework.total}`);
                 }
             }
 
             if (options.enableDiscussion) {
                 let rounds = 0;
+                let skipCurrentCourse = false;
+
                 while (discussionNeedMore(discussion)) {
-                    rounds++;
-                    log(`💬 讨论未满分，第 ${rounds} 轮补评论（当前 ${discussion.score}/${discussion.weight}，讨论数 ${discussion.count}）`);
-                    const sent = await runCourseDiscussionAutomation(page, courseId, log, options).catch(err => {
-                        log(`⚠️ 评论流程失败: ${err.message}`);
-                        return 0;
-                    });
-                    if (sent <= 0) {
-                        log('⚠️ 没有新的可评论目标，结束当前课程讨论补足');
+                    if (!isPageUsable(page)) {
+                        markPageClosedSkip(log, courseId, 'discussion before round');
+                        page = null;
+                        skipCurrentCourse = true;
                         break;
                     }
 
-                    progress = await getCourseProgress(page, courseId).catch(() => progress);
+                    rounds++;
+                    log(`[task-worker] discussion round ${rounds}, current ${discussion.score}/${discussion.weight}, count ${discussion.count}`);
+
+                    const sent = await runCourseDiscussionAutomation(page, courseId, log, options).catch(err => {
+                        log(`[task-worker] discussion workflow failed: ${err.message}`);
+                        return 0;
+                    });
+
+                    if (!isPageUsable(page)) {
+                        markPageClosedSkip(log, courseId, 'discussion workflow');
+                        page = null;
+                        skipCurrentCourse = true;
+                        break;
+                    }
+
+                    if (sent <= 0) {
+                        log('[task-worker] no new discussion targets, finish current course discussion');
+                        break;
+                    }
+
+                    const nextProgress = await refreshCourseProgress(page, courseId, progress, log);
+                    if (nextProgress === null) {
+                        page = null;
+                        skipCurrentCourse = true;
+                        break;
+                    }
+
+                    progress = nextProgress;
                     discussion = getDiscussionSnapshot(progress);
-                    log(`📊 评论后：讨论得分 ${discussion.score}/${discussion.weight}，讨论数 ${discussion.count}`);
+                    log(`[task-worker] discussion after round: ${discussion.score}/${discussion.weight}, count ${discussion.count}`);
 
                     if (rounds >= (options.discussionMaxRounds || 5)) {
-                        log('⚠️ 达到评论轮次上限，切换下一门课程');
+                        log('[task-worker] discussion rounds reached limit, move to next course');
                         break;
                     }
                 }
+
+                if (skipCurrentCourse) {
+                    continue;
+                }
             }
 
-            log('✅ 当前课程任务窗口处理完成');
+            log('[task-worker] current course task workflow completed');
         }
     } finally {
-        await page.close().catch(() => {});
+        if (isPageUsable(page)) {
+            await page.close().catch(() => {});
+        }
     }
 }
 
