@@ -1,4 +1,4 @@
-# fuckuooc
+# fuckuooc（孩子们快逃，它已经变成一坨大屎山了…
 
 一键全自动完成 [UOOC 联盟](https://uooc.net.cn/) 课程学习，包括视频观看、视频内弹题、测验答题。运行后可最小化窗口，去做自己的事情。该工具修改自https://github.com/YusongXiao/fuckuooc添加了自动评论与自动完成作业功能
 
